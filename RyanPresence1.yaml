@@ -1,6 +1,6 @@
 substitutions:
-  device_name: "ryan-presence-06"
-  friendly_name: "ryan-presence-06"
+  device_name: "ryan-presence"
+  friendly_name: "ryan-presence"
   uart_target_output_disabled: "false"
   uart_presence_output_disabled: "false"
 
