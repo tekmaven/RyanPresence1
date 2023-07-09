@@ -1,0 +1,432 @@
+substitutions:
+  device_name: "ryan-presence-06"
+  friendly_name: "ryan-presence-06"
+  uart_target_output_disabled: "false"
+  uart_presence_output_disabled: "false"
+
+dashboard_import:
+  package_import_url: github://tekmaven/RyanPresence1/RyanPresence1.yaml@main
+  import_full_config: true
+
+esphome:
+  name: "${device_name}"
+  friendly_name: "${friendly_name}"
+  name_add_mac_suffix: true
+  project:
+    name: ryan.presence1
+    version: "1.0.0"
+  platformio_options:
+    board_build.flash_mode: dio
+    board_build.mcu: esp32c3
+  on_boot: 
+    - priority: 600
+      then:
+        - light.turn_on:
+            id: led
+            brightness: 50%
+            effect: Pulse
+    - priority: -100
+      then:
+        - wait_until:
+            condition:
+              api.connected:
+            timeout: 5min
+        - light.turn_off:
+            id: led
+
+
+esp32:
+  board: esp32-c3-devkitm-1
+  variant: esp32c3
+  framework:
+    type: arduino
+
+# Enable logging
+logger:
+
+# Enable Home Assistant API
+api:
+
+ota:
+
+wifi:
+  output_power: 8.5
+  # Enable fallback hotspot in case wifi connection fails
+  ap: {} # This spawns an AP with the device name and mac address with no password.
+
+captive_portal:
+
+i2c:
+  sda: GPIO1
+  scl: GPIO0
+  scan: true
+
+sensor:
+  - platform: uptime
+    name: "Uptime"
+    update_interval: 30s
+  - platform: wifi_signal # Reports the WiFi signal strength/RSSI in dB
+    name: "WiFi Signal dB"
+    id: wifi_signal_db
+    update_interval: 60s
+    entity_category: "diagnostic"
+
+  - platform: copy # Reports the WiFi signal strength in %
+    source_id: wifi_signal_db
+    name: "WiFi Signal Percent"
+    filters:
+      - lambda: return min(max(2 * (x + 100.0), 0.0), 100.0);
+    unit_of_measurement: "%"
+    entity_category: "diagnostic"
+
+  - platform: internal_temperature
+    name: "ESP32 Temperature"
+
+  - platform: bh1750
+    name: "Illuminance"
+    address: 0x23
+    update_interval: 10s
+
+  - platform: bme280
+    temperature:
+      name: "Temperature"
+      oversampling: 16x
+    pressure:
+      name: "Pressure"
+    humidity:
+      name: "Humidity"
+    address: 0x76
+    update_interval: 60s
+light:
+  - platform: neopixelbus
+    type: GRB
+    variant: WS2812
+    pin: GPIO7
+    num_leds: 1
+    default_transition_length: 0s
+    name: "LED"
+    id: led
+    effects:
+      - pulse:
+      - random:
+binary_sensor:
+  - platform: gpio
+    pin:
+      number: GPIO9
+      inverted: true
+      mode:
+        input: true
+        pullup: true
+    name: "Button"
+  - platform: gpio
+    pin:
+      number: GPIO10
+      mode:
+        input: true
+        pulldown: true
+    name: "Motion"
+    id: pir_motion_sensor
+    device_class: motion
+    filters:
+      - delayed_on: 250ms
+      - delayed_off: 15s
+    on_press:
+      then:
+        - script.execute: set_led_based_on_presence
+    on_release:
+      then:
+        - script.execute: set_led_based_on_presence
+  - platform: gpio
+    name: mmWave
+    id: mmwave
+    device_class: occupancy
+    pin:
+      number: GPIO8
+      mode:
+        input: true
+        pulldown: true
+    on_press:
+      then:
+        - script.execute: set_led_based_on_presence
+    on_release:
+      then:
+        - script.execute: set_led_based_on_presence
+  - platform: template
+    name: Occupancy
+    id: occupancy
+    device_class: occupancy
+    filters:
+      - delayed_off: 15s
+    lambda: |-
+      if ( id(mmwave).state or id(pir_motion_sensor).state) {
+        return true;
+      } 
+      else if (id(mmwave).state == 0 and id(pir_motion_sensor).state == 0) {
+        return false;
+      } 
+      else {
+        return id(occupancy).state;
+      }
+
+web_server:
+  port: 80
+
+button:
+  - platform: safe_mode
+    name: "Restart (Safe Mode)"
+  - platform: restart
+    name: "Restart"
+
+  - platform: template
+    name: "Factory Reset mmWave"
+    id: "factory_reset_mmwave"
+    internal: false
+    entity_category: config
+    on_press:
+      - switch.turn_off: mmwave_sensor
+      - delay: 1s
+      - uart.write: "resetCfg"
+      - delay: 3s
+      - switch.turn_on: mmwave_sensor
+debug:
+  update_interval: 5s
+
+text_sensor:
+  - platform: version
+    name: "ESPHome Version"
+    id: "esphome_version"
+  - platform: debug
+    device:
+      name: "Device Info"
+    reset_reason:
+      name: "Reset Reason"
+
+uart:
+  id: uart_bus
+  tx_pin: GPIO4
+  rx_pin: GPIO5
+  baud_rate: 115200
+  debug:
+    direction: BOTH
+    dummy_receiver: true
+    after:
+      delimiter: "\n"
+    sequence:
+      - lambda: UARTDebug::log_string(direction, bytes);
+
+switch:
+  - platform: template
+    name: "mmWave Sensor"
+    id: "mmwave_sensor"
+    entity_category: config
+    optimistic: true
+    restore_state: true
+    turn_on_action:
+      - uart.write: "saveCfg 0x45670123 0xCDEF89AB 0x956128C6 0xDF54AC89"
+      - delay: 1s
+      - uart.write: "sensorStart"
+      - delay: 1s
+    turn_off_action:
+      - uart.write: "sensorStop"
+      - delay: 1s
+
+  - platform: template
+    name: "mmWave LED"
+    id: "mmwave_led"
+    entity_category: config
+    optimistic: true
+    restore_state: true
+    turn_on_action:
+      - switch.turn_off: mmwave_sensor
+      - delay: 1s
+      - uart.write: "setLedMode 1 0"
+      - delay: 1s
+      - uart.write: "saveConfig"
+      - delay: 3s
+      - switch.turn_on: mmwave_sensor
+    turn_off_action:
+      - switch.turn_off: mmwave_sensor
+      - delay: 1s
+      - uart.write: "setLedMode 1 1"
+      - delay: 1s
+      - uart.write: "saveConfig"
+      - delay: 3s
+      - switch.turn_on: mmwave_sensor
+
+  - platform: template
+    name: "uart_presence_output"
+    id: "uart_presence_output"
+    entity_category: config
+    internal: ${uart_presence_output_disabled}
+    optimistic: true
+    restore_state: true
+    turn_on_action:
+      - switch.turn_off: mmwave_sensor
+      - delay: 1s
+      - uart.write: "setUartOutput 1 1"
+      - delay: 1s
+      - uart.write: "saveConfig"
+      - delay: 3s
+      - switch.turn_on: mmwave_sensor
+    turn_off_action:
+      - switch.turn_off: mmwave_sensor
+      - delay: 1s
+      - uart.write: "setUartOutput 1 0"
+      - delay: 1s
+      - uart.write: "saveConfig"
+      - delay: 3s
+      - switch.turn_on: mmwave_sensor
+
+  - platform: template
+    name: "uart_target_output"
+    id: "uart_target_output"
+    entity_category: config
+    internal: ${uart_target_output_disabled}
+    optimistic: true
+    restore_state: true
+    assumed_state: false
+    turn_on_action:
+      - switch.turn_off: mmwave_sensor
+      - delay: 1s
+      - uart.write: "setUartOutput 2 1 1 1"
+      - delay: 1s
+      - uart.write: "saveConfig"
+      - delay: 3s
+      - switch.turn_on: mmwave_sensor
+    turn_off_action:
+      - switch.turn_off: mmwave_sensor
+      - delay: 1s
+      - uart.write: "setUartOutput 2 0"
+      - delay: 1s
+      - uart.write: "saveConfig"
+      - delay: 3s
+      - switch.turn_on: mmwave_sensor
+
+number:
+  - platform: template
+    name: mmWave Distance
+    id: mmwave_distance
+    entity_category: config
+    min_value: 0
+    max_value: 800
+    initial_value: 315
+    optimistic: true
+    step: 15
+    restore_value: true
+    unit_of_measurement: cm
+    mode: slider
+    set_action:
+      - switch.turn_off: mmwave_sensor
+      - delay: 1s
+      - uart.write: !lambda int cm = (int)ceil(x / 15.0);
+          std::string cms = "detRangeCfg -1 0 " + to_string(cm);
+          return std::vector<unsigned char>(cms.begin(), cms.end());
+      - delay: 1s
+      - uart.write: "saveCfg 0x45670123 0xCDEF89AB 0x956128C6 0xDF54AC89"
+      - delay: 1s
+      - switch.turn_on: mmwave_sensor
+
+  - platform: template
+    name: mmWave Off Latency
+    id: mmwave_off_latency
+    entity_category: config
+    min_value: 1
+    max_value: 60
+    initial_value: 15
+    optimistic: true
+    step: 1
+    restore_value: true
+    unit_of_measurement: seconds
+    mode: slider
+    set_action:
+      - switch.turn_off: mmwave_sensor
+      - delay: 1s
+      - uart.write: !lambda |-
+          std::string mss = "setLatency " + to_string(id(mmwave_on_latency).state) + " " + to_string(id(mmwave_off_latency).state);
+          return std::vector<unsigned char>(mss.begin(), mss.end());
+      - delay: 1s
+      - uart.write: "saveCfg 0x45670123 0xCDEF89AB 0x956128C6 0xDF54AC89"
+      - delay: 1s
+      - switch.turn_on: mmwave_sensor
+
+  - platform: template
+    name: mmWave On Latency
+    id: mmwave_on_latency
+    entity_category: config
+    min_value: 0
+    max_value: 60
+    initial_value: 0
+    optimistic: true
+    step: 0.5
+    restore_value: true
+    unit_of_measurement: seconds
+    mode: slider
+    set_action:
+      - switch.turn_off: mmwave_sensor
+      - delay: 1s
+      - uart.write: !lambda |-
+          std::string mss = "setLatency " + to_string(id(mmwave_on_latency).state) + " " + to_string(id(mmwave_off_latency).state);
+          return std::vector<unsigned char>(mss.begin(), mss.end());
+      - delay: 1s
+      - uart.write: "saveCfg 0x45670123 0xCDEF89AB 0x956128C6 0xDF54AC89"
+      - delay: 1s
+      - switch.turn_on: mmwave_sensor
+
+  - platform: template
+    name: mmWave Sensitivity
+    id: mmwave_sensitivity
+    entity_category: config
+    min_value: 0
+    max_value: 9
+    initial_value: 7
+    optimistic: true
+    step: 1
+    restore_value: true
+    set_action:
+      - switch.turn_off: mmwave_sensor
+      - delay: 1s
+      - uart.write:
+          !lambda std::string mss = "setSensitivity " + to_string((int)x);
+          return std::vector<unsigned char>(mss.begin(), mss.end());
+      - delay: 1s
+      - uart.write: "saveConfig"
+      - delay: 1s
+      - switch.turn_on: mmwave_sensor
+
+script:
+  - id: set_led_based_on_presence
+    mode: restart
+    then:
+      - if:
+          condition:
+            lambda: |-
+              return id(pir_motion_sensor).state == true && id(mmwave).state == true;
+          then:
+            - light.turn_on: # both on, blue
+                id: led
+                red: 0%
+                green: 0%
+                blue: 100%
+          else:
+            - if:
+                condition:
+                  binary_sensor.is_on: pir_motion_sensor
+                then:
+                  - light.turn_on: # pir on only, orange
+                      id: led
+                      red: 100%
+                      green: 75%
+                      blue: 0%
+                else:
+                  - if:
+                      condition:
+                        binary_sensor.is_on: mmwave
+                      then:
+                        - light.turn_on: # mmwave on only, green
+                            id: led
+                            red: 0%
+                            green: 100%
+                            blue: 0%
+                      else:
+                        - light.turn_off: led # everything off
+
