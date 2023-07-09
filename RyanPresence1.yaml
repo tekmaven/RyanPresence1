@@ -1,6 +1,6 @@
 substitutions:
   device_name: "ryan-presence"
-  friendly_name: "ryan-presence"
+  friendly_name: "${device_name}"
   uart_target_output_disabled: "false"
   uart_presence_output_disabled: "false"
 
@@ -11,7 +11,7 @@ dashboard_import:
 esphome:
   name: "${device_name}"
   friendly_name: "${friendly_name}"
-  name_add_mac_suffix: true
+  name_add_mac_suffix: false # enabled on distributed firmware, disable after importing
   project:
     name: ryan.presence1
     version: "1.0.0"
