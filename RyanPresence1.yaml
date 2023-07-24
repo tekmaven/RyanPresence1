@@ -39,7 +39,7 @@ esp32:
   board: esp32-c3-devkitm-1
   variant: esp32c3
   framework:
-    type: arduino
+    type: esp-idf
 
 # Enable logging
 logger:
@@ -98,9 +98,10 @@ sensor:
     address: 0x76
     update_interval: 60s
 light:
-  - platform: neopixelbus
-    type: GRB
-    variant: WS2812
+  - platform: esp32_rmt_led_strip
+    rgb_order: GRB
+    rmt_channel: 0
+    chipset: WS2812
     pin: GPIO7
     num_leds: 1
     default_transition_length: 0s
